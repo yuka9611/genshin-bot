@@ -1,15 +1,16 @@
-import sqlite3
 import re
+import sqlite3
 import urllib.parse
-import httpx
 from pathlib import Path
+
+import httpx
 from nonebot import on_regex
 from nonebot.adapters.onebot.v11 import Bot, Event
 
 # === 配置 ===
 DB_PATH = Path(__file__).parent / "data" / "genshin_text.db"
 WIKI_API = "https://wiki.biligame.com/ys/api.php"
-TRUNCATE_LEN = 60 
+TRUNCATE_LEN = 60
 PAGE_LIMIT = 5  # 每页显示数量
 
 class DB:
@@ -18,14 +19,7 @@ class DB:
         # 开启 WAL 模式和缓存优化，大幅提升读取性能
         c.execute("PRAGMA journal_mode=WAL;")
         c.execute("PRAGMA cache_size=-2000;") # 使用约 2MB 缓存
-        
-        def regexp_func(expr, item):
-            if item is None: return False
-            try:
-                return re.search(expr, str(item), re.IGNORECASE) is not None
-            except:
-                return False
-        c.create_function("REGEXP", 2, regexp_func)
+
         return c
 
     def get_by_id(self, text_id, table="text_map", id_col="id"):
@@ -51,14 +45,10 @@ class DB:
         返回: (results, has_next)
         """
         if not DB_PATH.exists(): return [], False
-        
-        is_regex = False
-        if kw.startswith("r:"):
-            is_regex = True
-            kw = kw[2:]
-        
+
+        kw = kw.strip()
         offset = (page - 1) * PAGE_LIMIT
-        
+
         # 优化策略：尝试多获取 1 条数据 (PAGE_LIMIT + 1)
         # 如果能获取到，说明有下一页；否则说明到了末尾。
         # 这样就不需要运行昂贵的 COUNT(*) 查询了。
@@ -78,28 +68,46 @@ class DB:
                 cur = c.cursor()
                 queries = []
                 params = []
-                
+
+                kw_lower = kw.lower()
+                kw_like = f"%{kw}%"
+                kw_compact = kw.replace(" ", "")
+                kw_compact_lower = kw_compact.lower()
+                fuzzy_pattern = None
+                if len(kw_compact) > 1:
+                    fuzzy_pattern = f"%{'%'.join(kw_compact)}%"
+
                 for t_name, id_col, source in targets:
-                    if is_regex:
-                        q = f"SELECT {id_col} as id, chs, jp, '{source}' as source FROM {t_name} WHERE {col} REGEXP ?"
+                    if fuzzy_pattern:
+                        q = (
+                            f"SELECT {id_col} as id, chs, jp, '{source}' as source, "
+                            f"CASE "
+                            f"WHEN LOWER({col}) = ? OR LOWER(REPLACE({col}, ' ', '')) = ? THEN 0 "
+                            f"WHEN LOWER({col}) LIKE LOWER(?) THEN 1 "
+                            f"ELSE 2 END AS match_rank FROM {t_name} "
+                            f"WHERE LOWER({col}) LIKE LOWER(?) OR LOWER(REPLACE({col}, ' ', '')) LIKE LOWER(?)"
+                        )
                         queries.append(q)
-                        params.append(kw)
+                        params.extend([kw_lower, kw_compact_lower, kw_like, kw_like, fuzzy_pattern])
                     else:
-                        q = f"SELECT {id_col} as id, chs, jp, '{source}' as source FROM {t_name} WHERE LOWER({col}) LIKE LOWER(?)"
+                        q = (
+                            f"SELECT {id_col} as id, chs, jp, '{source}' as source, "
+                            f"CASE WHEN LOWER({col}) = ? THEN 0 ELSE 1 END AS match_rank FROM {t_name} "
+                            f"WHERE LOWER({col}) LIKE LOWER(?)"
+                        )
                         queries.append(q)
-                        params.append(f"%{kw}%")
-                
+                        params.extend([kw_lower, kw_like])
+
                 full_sql = " UNION ALL ".join(queries)
-                # 只获取 (Limit + 1) 条
-                full_sql += f" LIMIT ? OFFSET ?"
+                full_sql = f"SELECT id, chs, jp, source FROM ({full_sql}) ORDER BY match_rank, id LIMIT ? OFFSET ?"
                 params.append(fetch_limit)
                 params.append(offset)
-                
+
                 cur.execute(full_sql, params)
-                
+
                 raw_results = cur.fetchall()
                 results = []
-                
+
                 # 判断是否有下一页
                 has_next = False
                 if len(raw_results) > PAGE_LIMIT:
@@ -113,7 +121,7 @@ class DB:
                     if len(cn_text) > TRUNCATE_LEN: cn_text = cn_text[:TRUNCATE_LEN] + "..."
                     if len(jp_text) > TRUNCATE_LEN: jp_text = jp_text[:TRUNCATE_LEN] + "..."
                     results.append({"id": r[0], "cn": cn_text, "jp": jp_text, "source": r[3]})
-                
+
                 return results, has_next
 
         except Exception as e:
@@ -134,12 +142,12 @@ async def search_wiki(kw):
             search_res = await client.get(WIKI_API, params={"action":"query","list":"search","srsearch":kw,"format":"json"})
             search_data = search_res.json()
             if not search_data["query"]["search"]: return None
-            
+
             title = search_data["query"]["search"][0]["title"]
             parse_res = await client.get(WIKI_API, params={"action": "parse", "page": title, "prop": "text", "format": "json", "redirects": True})
             parse_data = parse_res.json()
             if "error" in parse_data: return None
-            
+
             html = parse_data["parse"]["text"]["*"]
             final_title = parse_data["parse"]["title"]
             desc = ""
@@ -147,7 +155,7 @@ async def search_wiki(kw):
             if bot_match:
                 desc = clean_html(bot_match.group(1))
                 if len(desc) > 200: desc = desc[:200] + "..."
-            
+
             safe_title = urllib.parse.quote(final_title)
             return {"t": final_title, "d": desc, "url": f"https://wiki.biligame.com/ys/{safe_title}"}
         except: return "ERROR"
@@ -172,7 +180,7 @@ sub_cmd = on_regex(r"^#sub\s*(.+)$", priority=5, block=True)
 async def _(event: Event):
     msg = """🤖 原神文本查询助手 (极速版)
 ━━━━━━━━━━━━━━
-🔍 基础搜索
+🔍 基础搜索（支持模糊匹配，精确匹配优先）
 • #jp <关键词> [页码]
 • #cn <关键词> [页码]
 
@@ -184,7 +192,9 @@ async def _(event: Event):
 • #id <ID/文件名> : 查全文
 • #wiki <关键词> : 查Wiki
 
-💡 提示: 为了提升速度，不再显示总条数。
+💡 提示
+• 结果按“精确匹配 → 普通匹配 → 模糊匹配”排序
+• 为了提升速度，不再显示总条数
 """
     await help_cmd.finish(msg)
 
@@ -231,14 +241,14 @@ async def _(event: Event):
 @id_cmd.handle()
 async def _(event: Event):
     raw_id = re.sub(r"^#id\s*", "", event.get_plaintext().strip()).strip()
-    res = db.get_by_id(raw_id) 
+    res = db.get_by_id(raw_id)
     if not res: await id_cmd.finish(f"未在任何库中找到 ID: {raw_id}")
 
     source = res.get('source', '未知来源')
     id_label = "📄 文件名" if source in ["书籍文档", "剧情字幕"] else "🆔 ID"
     msg_jp = res['jp'][:1000] + "..." if len(res['jp']) > 1000 else res['jp']
     msg_cn = res['cn'][:1000] + "..." if len(res['cn']) > 1000 else res['cn']
-    
+
     msg = f"📁 来源: {source}\n{id_label}: {res['id']}\n" \
           f"🇯🇵 JP:\n{msg_jp}\n{'-'*15}\n🇨🇳 CN:\n{msg_cn}"
     await id_cmd.finish(msg)
@@ -247,25 +257,25 @@ async def send(matcher, res, has_next, cmd="", kw="", page=1):
     if not res:
         if page > 1: await matcher.finish(f"没有更多结果了 (当前第 {page} 页)")
         else: await matcher.finish("未找到匹配项")
-    
+
     if res[0]['id'] == "ERROR":
         await matcher.finish(f"⚠️ {res[0]['cn']}")
         return
-    
+
     msg_list = [f"🔍 结果 (第 {page} 页):"]
-    
+
     for i in res:
         source = i.get('source', 'map')
         if source == 'read': icon = "📄"
         elif source == 'sub': icon = "🎬"
         else: icon = "🆔"
         msg_list.append(f"{icon} {i['id']}\n🇯🇵 {i['jp']}\n🇨🇳 {i['cn']}\n{'='*10}")
-    
+
     if has_next:
         msg_list.append(f"👉 下一页: {cmd} {kw} {page+1}")
     else:
         msg_list.append("🏁 (已显示全部)")
-    
+
     msg_list.append("💡 全文: #id <ID>")
-    
+
     await matcher.finish("\n".join(msg_list))
