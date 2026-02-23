@@ -27,6 +27,7 @@ class DB:
         if not DB_PATH.exists(): return None
         tables_to_check = [
             ("text_map", "id", "普通文本"),
+            ("sr_text_map", "id", "星铁文本"),
             ("readable", "filename", "书籍文档"),
             ("subtitle", "filename", "剧情字幕")
         ]
@@ -56,6 +57,8 @@ class DB:
 
         if table == "all":
             targets = [("text_map", "id", "map"), ("readable", "filename", "read"), ("subtitle", "filename", "sub")]
+        elif table == "sr_text_map":
+            targets = [("sr_text_map", "id", "srmap")]
         elif table == "readable":
             targets = [("readable", "filename", "read")]
         elif table == "subtitle":
@@ -171,6 +174,8 @@ def parse_cmd_args(text, prefix):
 help_cmd = on_regex(r"^#help\s*$", priority=5, block=True)
 jp_cmd = on_regex(r"^#jp\s*(.+)$", priority=5, block=True)
 cn_cmd = on_regex(r"^#cn\s*(.+)$", priority=5, block=True)
+srjp_cmd = on_regex(r"^#srjp\s*(.+)$", priority=5, block=True)
+srcn_cmd = on_regex(r"^#srcn\s*(.+)$", priority=5, block=True)
 id_cmd = on_regex(r"^#id\s*(.+)$", priority=5, block=True)
 wiki_cmd = on_regex(r"^#wiki\s*(.+)$", priority=5, block=True)
 read_cmd = on_regex(r"^#read\s*(.+)$", priority=5, block=True)
@@ -186,11 +191,15 @@ async def _(event: Event):
 
 📚 分类搜索
 • #read <关键词> : 仅搜书籍
-• #sub <关键词>  : 仅搜剧情
+• #sub <关键词>  : 仅搜字幕
 
 🔢 其他
 • #id <ID/文件名> : 查全文
 • #wiki <关键词> : 查Wiki
+━━━━━━━━━━━━━━
+🚄 星铁文本搜索
+• #srjp <关键词> [页码]
+• #srcn <关键词> [页码]
 
 💡 提示
 • 结果按“精确匹配 → 普通匹配 → 模糊匹配”排序
@@ -211,6 +220,20 @@ async def _(event: Event):
     if not kw: return
     res, has_next = db.search("chs", kw, table="all", page=page)
     await send(cn_cmd, res, has_next, cmd="#cn", kw=kw, page=page)
+
+@srjp_cmd.handle()
+async def _(event: Event):
+    kw, page = parse_cmd_args(event.get_plaintext().strip(), "#srjp")
+    if not kw: return
+    res, has_next = db.search("jp", kw, table="sr_text_map", page=page)
+    await send(srjp_cmd, res, has_next, cmd="#srjp", kw=kw, page=page)
+
+@srcn_cmd.handle()
+async def _(event: Event):
+    kw, page = parse_cmd_args(event.get_plaintext().strip(), "#srcn")
+    if not kw: return
+    res, has_next = db.search("chs", kw, table="sr_text_map", page=page)
+    await send(srcn_cmd, res, has_next, cmd="#srcn", kw=kw, page=page)
 
 @read_cmd.handle()
 async def _(event: Event):

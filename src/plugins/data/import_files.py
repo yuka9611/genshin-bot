@@ -9,6 +9,12 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent
 DB_NAME = "genshin_text.db"
 DB_PATH = BASE_DIR / DB_NAME
+ANIME_GAME_DATA_DIR = Path(os.getenv("ANIME_GAME_DATA_DIR", r"C:\Users\yuka9\Downloads\AnimeGameData"))
+TEXTMAP_DIR = ANIME_GAME_DATA_DIR / "TextMap"
+READABLE_DIR = ANIME_GAME_DATA_DIR / "Readable"
+SUBTITLE_DIR = ANIME_GAME_DATA_DIR / "Subtitle"
+TURN_BASED_GAME_DATA_DIR = Path(os.getenv("TURN_BASED_GAME_DATA_DIR", r"C:\Users\yuka9\Downloads\turnbasedgamedata"))
+SR_TEXTMAP_DIR = TURN_BASED_GAME_DATA_DIR / "TextMap"
 
 # TextMapのファイル名
 TEXTMAP_CHS = "TextMapCHS.json"
@@ -34,6 +40,13 @@ def init_db():
                     )''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_tm_chs ON text_map(chs)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_tm_jp ON text_map(jp)')
+        c.execute('''CREATE TABLE IF NOT EXISTS sr_text_map (
+                        id TEXT PRIMARY KEY,
+                        chs TEXT,
+                        jp TEXT
+                    )''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_sr_tm_chs ON sr_text_map(chs)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_sr_tm_jp ON sr_text_map(jp)')
 
         # 2. 書籍用テーブル
         c.execute('''CREATE TABLE IF NOT EXISTS readable (
@@ -85,67 +98,95 @@ def clean_srt(content):
     return re.sub(r'\n{3,}', '\n\n', text).strip()
 
 def prepare_folders():
-    """フォルダ構造作成"""
-    structure = [("Readable", ["CHS", "JP"]), ("Subtitle", ["CHS", "JP"])]
-    created = False
-    for main_folder, sub_folders in structure:
-        for sub in sub_folders:
-            path = BASE_DIR / main_folder / sub
-            if not path.exists():
-                path.mkdir(parents=True)
-                print(f"✨ フォルダ作成: {main_folder}/{sub}")
-                created = True
-    if created:
-        print("\n⚠️  書籍/字幕用のフォルダを作成しました。必要なファイルを配置してください。")
+    """Check whether required AnimeGameData paths exist."""
+    required_paths = [
+        TEXTMAP_DIR / TEXTMAP_CHS,
+        TEXTMAP_DIR / TEXTMAP_JP,
+        SR_TEXTMAP_DIR / TEXTMAP_CHS,
+        SR_TEXTMAP_DIR / TEXTMAP_JP,
+        READABLE_DIR / "CHS",
+        READABLE_DIR / "JP",
+        SUBTITLE_DIR / "CHS",
+        SUBTITLE_DIR / "JP",
+    ]
+    missing_paths = [p for p in required_paths if not p.exists()]
+    if missing_paths:
+        print("\n[ERROR] Missing required source paths:")
+        for source_path in missing_paths:
+            print(f"  - {source_path}")
+        return False
+    return True
 
-# === TextMap処理 ===
+# === TextMap Processing ===
 
-def process_textmap():
-    chs_path = BASE_DIR / TEXTMAP_CHS
-    jp_path = BASE_DIR / TEXTMAP_JP
-    
+def process_textmap_to_table(chs_path, jp_path, table_name, label):
     if not chs_path.exists() or not jp_path.exists():
-        print(f"\n⚠️  TextMap JSONが見つからないため、スキップします。")
+        print(f"\n[WARN] {label} TextMap JSON not found, skip.")
         return
 
-    print(f"\n🚀 TextMap (JSON) のインポートを開始...")
+    print(f"\n[INFO] Importing {label} TextMap ...")
     start_time = time.time()
-    
+
     try:
-        with open(chs_path, "r", encoding="utf-8") as f: chs_data = json.load(f)
-        with open(jp_path, "r", encoding="utf-8") as f: jp_data = json.load(f)
+        with open(chs_path, "r", encoding="utf-8") as f:
+            chs_data = json.load(f)
+        with open(jp_path, "r", encoding="utf-8") as f:
+            jp_data = json.load(f)
     except Exception as e:
-        print(f"❌ JSON読み込みエラー: {e}")
+        print(f"[ERROR] Failed to load {label} TextMap: {e}")
         return
 
-    print("⚙️  データを結合・テキスト処理中...")
     rows = []
     all_ids = set(chs_data.keys()) | set(jp_data.keys())
-    
     for tid in all_ids:
         c = chs_data.get(tid)
         j = jp_data.get(tid)
 
-        if c: c = clean_text_content(c, 'CHS')
-        if j: j = clean_text_content(j, 'JP')
-        
+        if c:
+            c = clean_text_content(c, "CHS")
+        if j:
+            j = clean_text_content(j, "JP")
+
         if c or j:
             rows.append((tid, c, j))
-            
-    print(f"💾 {len(rows)} 件のデータを書き込み中...")
+
     with get_db() as conn:
         c = conn.cursor()
-        c.execute("DELETE FROM text_map")
-        c.executemany("INSERT INTO text_map (id, chs, jp) VALUES (?, ?, ?)", rows)
+        c.execute(f"DELETE FROM {table_name}")
+        c.executemany(f"INSERT INTO {table_name} (id, chs, jp) VALUES (?, ?, ?)", rows)
         conn.commit()
-        
-    print(f"✅ TextMap完了 ({time.time() - start_time:.2f}秒)")
 
-# === 書籍・字幕処理（修正版） ===
+    print(f"[OK] {label} TextMap imported: {len(rows)} rows ({time.time() - start_time:.2f}s)")
+
+
+def process_textmap():
+    process_textmap_to_table(
+        TEXTMAP_DIR / TEXTMAP_CHS,
+        TEXTMAP_DIR / TEXTMAP_JP,
+        "text_map",
+        "Genshin"
+    )
+
+
+def process_sr_textmap():
+    process_textmap_to_table(
+        SR_TEXTMAP_DIR / TEXTMAP_CHS,
+        SR_TEXTMAP_DIR / TEXTMAP_JP,
+        "sr_text_map",
+        "StarRail"
+    )
+
 
 def process_category(category, ext, table_name, cleaner=None):
-    chs_dir = BASE_DIR / category / "CHS"
-    jp_dir = BASE_DIR / category / "JP"
+    source_map = {
+        "Readable": READABLE_DIR,
+        "Subtitle": SUBTITLE_DIR
+    }
+    source_dir = source_map.get(category)
+    if source_dir is None:
+        source_dir = ANIME_GAME_DATA_DIR / category
+    chs_dir = source_dir / "CHS"
+    jp_dir = source_dir / "JP"
     
     if not chs_dir.exists(): return
     chs_files = list(chs_dir.glob(f"*.{ext}"))
@@ -206,12 +247,17 @@ def process_category(category, ext, table_name, cleaner=None):
         print(f"✅ {category}完了: {len(data_list)} 件 (ペア成立: {matched_count})")
 
 def main():
-    print("=== 原神 統合データベース構築ツール ===")
-    prepare_folders()
+    print("=== Genshin Data Import Tool ===")
+    print(f"[INFO] Source (Genshin): {ANIME_GAME_DATA_DIR}")
+    print(f"[INFO] Source (StarRail): {TURN_BASED_GAME_DATA_DIR}")
+    if not prepare_folders():
+        return
     init_db()
     
     # 1. TextMap
     process_textmap()
+    # 1.5 StarRail TextMap
+    process_sr_textmap()
     # 2. 書籍 (txt) - ファイル名マッチング自動判別
     process_category("Readable", "txt", "readable", cleaner=None)
     # 3. 字幕 (srt) - 時間軸除去 + _CHS削除マッチング
