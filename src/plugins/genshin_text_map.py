@@ -7,18 +7,31 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 import httpx
-from data.search_index import (
-    SEARCH_DOCS_TABLE,
-    SEARCH_FTS_TABLE,
-    SOURCE_TABLES,
-    TABLE_SCOPES,
-    SearchStage,
-    build_search_stages,
-    configure_connection,
-    normalize_storage_text,
-)
 from nonebot import on_regex
 from nonebot.adapters.onebot.v11 import Event
+
+try:
+    from src.plugins.data.search_index import (
+        SEARCH_DOCS_TABLE,
+        SEARCH_FTS_TABLE,
+        SOURCE_TABLES,
+        TABLE_SCOPES,
+        SearchStage,
+        build_search_stages,
+        configure_connection,
+        normalize_storage_text,
+    )
+except ModuleNotFoundError:
+    from data.search_index import (
+        SEARCH_DOCS_TABLE,
+        SEARCH_FTS_TABLE,
+        SOURCE_TABLES,
+        TABLE_SCOPES,
+        SearchStage,
+        build_search_stages,
+        configure_connection,
+        normalize_storage_text,
+    )
 
 # === 配置 ===
 DB_PATH = Path(__file__).parent / "data" / "genshin_text.db"
