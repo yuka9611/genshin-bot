@@ -144,4 +144,5 @@ Subtitle/
 TextMap*
 .env*
 *.db
+/tests
 # End of https://www.toptal.com/developers/gitignore/api/python

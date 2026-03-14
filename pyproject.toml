@@ -3,10 +3,14 @@ name = "genshin-bot"
 version = "0.1.0"
 description = "genshin-bot"
 readme = "README.md"
-requires-python = ">=3.9, <4.0"
+requires-python = ">=3.10, <4.0"
 dependencies = [
+    "httpx",
+    "jieba>=0.42.1",
     "nonebot2[fastapi]>=2.4.4",
-    "nonebot-adapter-onebot>=2.4.6"
+    "nonebot-adapter-onebot>=2.4.6",
+    "sudachidict_core>=20250129",
+    "sudachipy>=0.6.10"
 ]
 
 [project.optional-dependencies]
@@ -29,7 +33,7 @@ nonebot-adapter-onebot = [
 "@local" = []
 [tool.ruff]
 line-length = 88
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.format]
 line-ending = "lf"
@@ -97,6 +101,6 @@ keep-runtime-typing = true
 
 [tool.pyright]
 # For Pylance/Pyright configurations, see https://microsoft.github.io/pyright/#/configuration.
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 pythonPlatform = "All"
 typeCheckingMode = "standard"
