@@ -40,6 +40,9 @@ TRUNCATE_LEN = 60
 PAGE_LIMIT = 5
 MAX_WIKI_DESC_LEN = 200
 MAX_DETAIL_LEN = 1000
+COMMAND_PREFIXES = ("#", "/", "／", "!", "！")
+DEFAULT_COMMAND_PREFIX = COMMAND_PREFIXES[0]
+COMMAND_PREFIX_PATTERN = f"[{re.escape(''.join(COMMAND_PREFIXES))}]"
 
 
 class SearchDocument(TypedDict):
@@ -337,8 +340,31 @@ async def search_wiki(kw: str) -> WikiSearchResponse:
             }
 
 
-def parse_cmd_args(text: str, prefix: str) -> tuple[str | None, int]:
-    raw = re.sub(f"^{prefix}\\s*", "", text).strip()
+def build_command_regex(command: str, *, with_args: bool) -> str:
+    suffix = r"\s*(.+)$" if with_args else r"\s*$"
+    return rf"^{COMMAND_PREFIX_PATTERN}{re.escape(command)}{suffix}"
+
+
+def strip_command_prefix(text: str, command: str) -> str:
+    return re.sub(
+        rf"^{COMMAND_PREFIX_PATTERN}{re.escape(command)}\s*",
+        "",
+        text,
+    ).strip()
+
+
+def get_invoked_command(text: str, command: str) -> str:
+    match = re.match(
+        rf"^({COMMAND_PREFIX_PATTERN}){re.escape(command)}(?:\s|$)",
+        text.strip(),
+    )
+    if not match:
+        return f"{DEFAULT_COMMAND_PREFIX}{command}"
+    return f"{match.group(1)}{command}"
+
+
+def parse_cmd_args(text: str, command: str) -> tuple[str | None, int]:
+    raw = strip_command_prefix(text, command)
     if not raw:
         return None, 1
     match = re.search(r"^(.*)\s+(\d+)$", raw)
@@ -347,15 +373,15 @@ def parse_cmd_args(text: str, prefix: str) -> tuple[str | None, int]:
     return raw, 1
 
 
-help_cmd = on_regex(r"^#help\s*$", priority=5, block=True)
-jp_cmd = on_regex(r"^#jp\s*(.+)$", priority=5, block=True)
-cn_cmd = on_regex(r"^#cn\s*(.+)$", priority=5, block=True)
-srjp_cmd = on_regex(r"^#srjp\s*(.+)$", priority=5, block=True)
-srcn_cmd = on_regex(r"^#srcn\s*(.+)$", priority=5, block=True)
-id_cmd = on_regex(r"^#id\s*(.+)$", priority=5, block=True)
-wiki_cmd = on_regex(r"^#wiki\s*(.+)$", priority=5, block=True)
-read_cmd = on_regex(r"^#read\s*(.+)$", priority=5, block=True)
-sub_cmd = on_regex(r"^#sub\s*(.+)$", priority=5, block=True)
+help_cmd = on_regex(build_command_regex("help", with_args=False), priority=5, block=True)
+jp_cmd = on_regex(build_command_regex("jp", with_args=True), priority=5, block=True)
+cn_cmd = on_regex(build_command_regex("cn", with_args=True), priority=5, block=True)
+srjp_cmd = on_regex(build_command_regex("srjp", with_args=True), priority=5, block=True)
+srcn_cmd = on_regex(build_command_regex("srcn", with_args=True), priority=5, block=True)
+id_cmd = on_regex(build_command_regex("id", with_args=True), priority=5, block=True)
+wiki_cmd = on_regex(build_command_regex("wiki", with_args=True), priority=5, block=True)
+read_cmd = on_regex(build_command_regex("read", with_args=True), priority=5, block=True)
+sub_cmd = on_regex(build_command_regex("sub", with_args=True), priority=5, block=True)
 
 
 @help_cmd.handle()
@@ -382,12 +408,15 @@ async def _(_event: Event):
 • #jp 默认支持日文汉字与假名互查
 • 结果按“原文精确 → 读音精确 → 前缀匹配”排序
 """
+    msg += "\n支持的前缀符号: # / ! ／ ！\n例如: #jp 派蒙 /jp 派蒙 !jp 派蒙"
     await help_cmd.finish(msg)
 
 
 @jp_cmd.handle()
 async def _(event: Event):
-    kw, page = parse_cmd_args(event.get_plaintext().strip(), "#jp")
+    text = event.get_plaintext().strip()
+    cmd = get_invoked_command(text, "jp")
+    kw, page = parse_cmd_args(text, "jp")
     if not kw:
         return
     res, has_next = db.search("jp", kw, table="all", page=page)
@@ -395,13 +424,15 @@ async def _(event: Event):
         jp_cmd,
         res,
         has_next=has_next,
-        context=SendContext(cmd="#jp", kw=kw, page=page),
+        context=SendContext(cmd=cmd, kw=kw, page=page),
     )
 
 
 @cn_cmd.handle()
 async def _(event: Event):
-    kw, page = parse_cmd_args(event.get_plaintext().strip(), "#cn")
+    text = event.get_plaintext().strip()
+    cmd = get_invoked_command(text, "cn")
+    kw, page = parse_cmd_args(text, "cn")
     if not kw:
         return
     res, has_next = db.search("chs", kw, table="all", page=page)
@@ -409,13 +440,15 @@ async def _(event: Event):
         cn_cmd,
         res,
         has_next=has_next,
-        context=SendContext(cmd="#cn", kw=kw, page=page),
+        context=SendContext(cmd=cmd, kw=kw, page=page),
     )
 
 
 @srjp_cmd.handle()
 async def _(event: Event):
-    kw, page = parse_cmd_args(event.get_plaintext().strip(), "#srjp")
+    text = event.get_plaintext().strip()
+    cmd = get_invoked_command(text, "srjp")
+    kw, page = parse_cmd_args(text, "srjp")
     if not kw:
         return
     res, has_next = db.search("jp", kw, table="sr_text_map", page=page)
@@ -423,13 +456,15 @@ async def _(event: Event):
         srjp_cmd,
         res,
         has_next=has_next,
-        context=SendContext(cmd="#srjp", kw=kw, page=page),
+        context=SendContext(cmd=cmd, kw=kw, page=page),
     )
 
 
 @srcn_cmd.handle()
 async def _(event: Event):
-    kw, page = parse_cmd_args(event.get_plaintext().strip(), "#srcn")
+    text = event.get_plaintext().strip()
+    cmd = get_invoked_command(text, "srcn")
+    kw, page = parse_cmd_args(text, "srcn")
     if not kw:
         return
     res, has_next = db.search("chs", kw, table="sr_text_map", page=page)
@@ -437,13 +472,15 @@ async def _(event: Event):
         srcn_cmd,
         res,
         has_next=has_next,
-        context=SendContext(cmd="#srcn", kw=kw, page=page),
+        context=SendContext(cmd=cmd, kw=kw, page=page),
     )
 
 
 @read_cmd.handle()
 async def _(event: Event):
-    kw, page = parse_cmd_args(event.get_plaintext().strip(), "#read")
+    text = event.get_plaintext().strip()
+    cmd = get_invoked_command(text, "read")
+    kw, page = parse_cmd_args(text, "read")
     if not kw:
         return
     res, has_next = db.search("chs", kw, table="readable", page=page)
@@ -451,13 +488,15 @@ async def _(event: Event):
         read_cmd,
         res,
         has_next=has_next,
-        context=SendContext(cmd="#read", kw=kw, page=page),
+        context=SendContext(cmd=cmd, kw=kw, page=page),
     )
 
 
 @sub_cmd.handle()
 async def _(event: Event):
-    kw, page = parse_cmd_args(event.get_plaintext().strip(), "#sub")
+    text = event.get_plaintext().strip()
+    cmd = get_invoked_command(text, "sub")
+    kw, page = parse_cmd_args(text, "sub")
     if not kw:
         return
     res, has_next = db.search("chs", kw, table="subtitle", page=page)
@@ -465,13 +504,14 @@ async def _(event: Event):
         sub_cmd,
         res,
         has_next=has_next,
-        context=SendContext(cmd="#sub", kw=kw, page=page),
+        context=SendContext(cmd=cmd, kw=kw, page=page),
     )
 
 
 @wiki_cmd.handle()
 async def _(event: Event):
-    kw = re.sub(r"^#wiki\s*", "", event.get_plaintext().strip()).strip()
+    text = event.get_plaintext().strip()
+    kw = strip_command_prefix(text, "wiki")
     await wiki_cmd.send(f"🌐 Wiki: {kw}")
     res = await search_wiki(kw)
     if res is None:
@@ -489,7 +529,8 @@ async def _(event: Event):
 
 @id_cmd.handle()
 async def _(event: Event):
-    raw_id = re.sub(r"^#id\s*", "", event.get_plaintext().strip()).strip()
+    text = event.get_plaintext().strip()
+    raw_id = strip_command_prefix(text, "id")
     res = db.get_by_id(raw_id)
     if not res:
         await id_cmd.finish(f"未在任何库中找到 ID: {raw_id}")
@@ -553,5 +594,6 @@ async def send(
     else:
         msg_list.append("🏁 (已显示全部)")
 
-    msg_list.append("💡 全文: #id <ID>")
+    msg_list.append(f"💡 全文: {context.cmd[:1] or DEFAULT_COMMAND_PREFIX}id <ID>")
+    msg_list.append(f"支持前缀: {' '.join(COMMAND_PREFIXES)}")
     await matcher.finish("\n".join(msg_list))
